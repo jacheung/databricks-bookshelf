@@ -1,0 +1,7 @@
+*.pyc
+.idea
+.idea/workspace.xml
+*.env
+.ipynb_checkpoints
+*.DS_store
+mlruns/
