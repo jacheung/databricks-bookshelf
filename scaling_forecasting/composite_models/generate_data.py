@@ -12,9 +12,9 @@ import pandas as pd
 
 # COMMAND ----------
 
-groups = 10
+groups = 4000
 n_features_per_group = 10
-n_samples_per_group = 100
+n_samples_per_group = 200
 
 # COMMAND ----------
 
@@ -64,9 +64,7 @@ spark_schema.add('target', FloatType())
 
 groups_df = create_groups()
 
-configure_features_udf=partial(create_group_features,
-                                n_features_per_group=n_features_per_group,
-                                n_samples_per_group=n_samples_per_group)
+configure_features_udf=partial(create_group_features, n_features_per_group, n_samples_per_group)
 
 features = groups_df.groupBy('group_name').applyInPandas(func=configure_features_udf,
                                                           schema=spark_schema)
