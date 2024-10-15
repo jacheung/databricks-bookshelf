@@ -17,6 +17,12 @@ import pyspark.sql.functions as func
 
 # COMMAND ----------
 
+# Prevent Spark from coalescing small in-memory partitions
+
+spark.conf.set('spark.sql.adaptive.enabled', 'false')
+
+# COMMAND ----------
+
 # MAGIC %md ### Generate features
 
 # COMMAND ----------
@@ -29,40 +35,164 @@ display(features)
 
 # COMMAND ----------
 
+num_cpu_cores = 96
+data_grain = ['group_name'] # The group by columns
+features.repartition(num_cpu_cores, data_grain)
+
+# COMMAND ----------
+
 # MAGIC %md #### Configure the PandasUDF
 
 # COMMAND ----------
 
-def fit_group_models(dbfs_file_path, experiment_location, run_id, group_data: pd.DataFrame):
+import time
+import random
+from functools import wraps
+
+def backoff(max_retries=5, max_delay=32, factor=2, jitter=True):
+    """
+    Exponential backoff decorator with optional jitter.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start_delay=1
+            delay = start_delay
+            retries = 0
+
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except MlflowException as e:
+                    retries += 1
+
+                    if jitter:
+                        delay = random.uniform(delay / 2, delay * 3 / 2)
+
+                    if delay > max_delay:
+                        delay = max_delay
+
+                    time.sleep(delay)
+                    delay *= factor
+
+        return wrapper
+    return decorator
+
+# def backoff(delay=1, retries=10):
+#     def decorator(func):
+#         def wrapper(*args, **kwargs):
+#             current_retry = 0
+#             current_delay = delay
+#             while current_retry < retries:
+#                 try:
+#                     return func(*args, **kwargs)
+#                 except MlflowException as e:
+#                     current_retry += 1
+#                     if current_retry >= retries:
+#                         raise e
+#                     print(f"Failed to execute function '{func.__name__}'. Retrying in {current_delay} seconds...")
+#                     time.sleep(current_delay)
+#                     current_delay *= 2
+#         return wrapper
+#     return decorator
+
+# COMMAND ----------
+
+# def fit_group_models(dbfs_file_path, experiment_location, run_id, group_data: pd.DataFrame):
+#   """
+#   This funcion is intended to be used with functools library to pass in
+#   parameters other than the Spark DataFrame on which it is applied.
+
+#   Example: pandas_udf = functools.partial(fit_group_models, "/dbfs/Shared/grouped_models", "/Shared/grouped_experiments", "b2784999872w")
+
+#   The function references an existing parent MLflow run and creates child runs under the parent.
+#   """
+#   group_name = group_data["group_name"].loc[0] 
+
+#   mlflow.set_experiment(experiment_location)
+
+#   with mlflow.start_run(run_id=run_id) as parent_run:
+
+#     with mlflow.start_run(run_name=group_name, nested=True) as child_run:
+
+#       group_features = group_data.drop(["group_name", "target"], axis=1)
+#       group_target = group_data['target']
+#       group_model = LinearRegression().fit(group_features.to_numpy(), np.array(group_target))
+#       saved_model_name = f"{dbfs_file_path}/{group_name}.pkl"
+#       joblib.dump(group_model, saved_model_name)
+
+#       df = pd.DataFrame([group_name], columns=['group_name'])
+#       df['model_storage_location'] = saved_model_name
+
+#       params = {"group_name": group_name}
+#       mlflow.log_params(params)
+#       mlflow.log_metric(key="random_rmse", value=np.random.rand(1))
+
+#   return df
+
+# COMMAND ----------
+
+import time
+import mlflow
+from mlflow.exceptions import MlflowException
+
+def fit_group_models_udf(dbfs_file_path, experiment_location, run_id, group_data: pd.DataFrame):
   """
   This funcion is intended to be used with functools library to pass in
   parameters other than the Spark DataFrame on which it is applied.
 
-  Example: pandas_udf = functools.partial(fit_group_models, "/dbfs/Shared/grouped_models", "/Shared/grouped_experiments", "b2784999872w")
+  Example: pandas_udf = functools.partial(fit_group_models_udf, "/dbfs/Shared/grouped_models", "/Shared/grouped_experiments", "b2784999872w")
 
   The function references an existing parent MLflow run and creates child runs under the parent.
   """
+  
+  @backoff(max_retries=10, factor=2)
+  def log_nested_run(params, metrics):
+    with mlflow.start_run(run_name=params['group_name'], nested=True) as child_run:
+      mlflow.log_params(params)
+      for key, value in metrics.items():
+        mlflow.log_metric(key=key, value=value)
 
-  group_name = group_data["group_name"].loc[0] 
+  
+  # def retry_with_exponential_backoff(func, max_attempts=5, initial_delay=1):
+  #   """
+  #   Attempts to call the given function with exponential backoff.
 
+  #   Parameters:
+  #   - func: The function to call.
+  #   - max_attempts: Maximum number of attempts.
+  #   - initial_delay: Initial delay between attempts in seconds.
+  #   """
+  #   attempt = 0
+  #   delay = initial_delay
+  #   while attempt < max_attempts:
+  #       try:
+  #           return func()
+  #       except MlflowException as e:
+  #           print(f"Attempt {attempt+1} failed with error: {e}. Retrying in {delay} seconds...")
+  #           time.sleep(delay)
+  #           attempt += 1
+  #           delay *= 2  # Double the delay for the next attempt
+  #   raise Exception("Maximum retry attempts reached. Operation failed.")
+  
   mlflow.set_experiment(experiment_location)
 
   with mlflow.start_run(run_id=run_id) as parent_run:
+    group_name = group_data["group_name"].loc[0] 
 
-    with mlflow.start_run(run_name=group_name, nested=True) as child_run:
+    group_features = group_data.drop(["group_name", "target"], axis=1)
+    group_target = group_data['target']
+    group_model = LinearRegression().fit(group_features.to_numpy(), np.array(group_target))
+    saved_model_name = f"{dbfs_file_path}/{group_name}.pkl"
+    joblib.dump(group_model, saved_model_name)
 
-      group_features = group_data.drop(["group_name", "target"], axis=1)
-      group_target = group_data['target']
-      group_model = LinearRegression().fit(group_features.to_numpy(), np.array(group_target))
-      saved_model_name = f"{dbfs_file_path}/{group_name}.pkl"
-      joblib.dump(group_model, saved_model_name)
+    df = pd.DataFrame([group_name], columns=['group_name'])
+    df['model_storage_location'] = saved_model_name
 
-      df = pd.DataFrame([group_name], columns=['group_name'])
-      df['model_storage_location'] = saved_model_name
-
-      params = {"group_name": group_name}
-      mlflow.log_params(params)
-      mlflow.log_metric(key="random_rmse", value=np.random.rand(1))
+    params = {"group_name": group_name}
+    metrics = {"random_rmse": np.random.rand(1)}
+    
+    log_nested_run(params, metrics)
 
   return df
 
@@ -107,7 +237,7 @@ class ModelLoader(mlflow.pyfunc.PythonModel):
 
 experiment_location = '/Users/jon.cheung@databricks.com/nested-runs'
 run_name = "group_models_class"
-pandas_udf = fit_group_models
+pandas_udf = fit_group_models_udf
 pandas_udf_schema = StructType().add('group_name', StringType()).add('model_storage_location', StringType())
 custom_mlflow_model = ModelLoader()
 temp_model_storage_path = "dbfs:/Users/jon.cheung@databricks.com/composite_model_nested"
