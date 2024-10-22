@@ -1,4 +1,20 @@
 # Databricks notebook source
+# MAGIC %md
+# MAGIC ## Setup:
+# MAGIC 1. Ensure your cluster is setup with your GCP credentials.  
+# MAGIC   * Push your GCP Service Account Token and 'private_key' and 'private_key_id' to Databricks Secrets API
+# MAGIC   * Setup your cluster in the Advanced Sections with the following parameters: 
+# MAGIC
+# MAGIC ```
+# MAGIC spark.hadoop.google.cloud.auth.service.account.enable.<bucket-name> true
+# MAGIC spark.hadoop.fs.gs.auth.service.account.email.<bucket-name> <client-email>
+# MAGIC spark.hadoop.fs.gs.project.id.<bucket-name> <project-id>
+# MAGIC spark.hadoop.fs.gs.auth.service.account.private.key.<bucket-name> {{secrets/scope/gsa_private_key}}
+# MAGIC spark.hadoop.fs.gs.auth.service.account.private.key.id.<bucket-name> {{secrets/scope/gsa_private_key_id}}
+# MAGIC ```
+
+# COMMAND ----------
+
 # Test GCS connection
 gcs_data_file = 'gs://mlflow-model-dump/iowa_daily.csv'
 df = spark.read.format("csv").load(gcs_data_file)
@@ -72,9 +88,11 @@ model_version_uri
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## MLFLOW-EXPORT-IMPORT
-# MAGIC 1. Export model from Unity Catalog --> DBFS
-# MAGIC 2. Move model from DBFS --> GCS
+# MAGIC ## Export model.
+# MAGIC The export model only works with local directories. Since GCS is an attached service, `export_model` can't write directly to this. Instead, we'll write to DBFS (Databricks File Store) and then copy from DBFS to GCS (Google Cloud Storage) using `dbutils`.
+# MAGIC
+# MAGIC 1. Export model from Unity Catalog --> DBFS using `export_model`
+# MAGIC 2. Move model from DBFS --> GCS using `dbutils`
 # MAGIC
 
 # COMMAND ----------
@@ -88,21 +106,18 @@ model_version_uri
 
 from mlflow_export_import.model.export_model import export_model
 
-# dump model into dbfs
+# Step 1. Copy model from UC to DBFS using export_model
 model_dir = 'FileStore/jon.cheung@databricks.com/mlflow-export-models'
 export_model(
     model_name = 'jon_cheung.mlflow-export-import.iris', 
     output_dir = f"/dbfs/{model_dir}/iris")
-
-
-# COMMAND ----------
 
 # check to make sure your model is in dbfs
 dbutils.fs.ls(f"{model_dir}")
 
 # COMMAND ----------
 
-# upload dbfs exported models to gcs
+# Step 2. Upload DBFS exported models to GCS using `dbutils`
 bucket_name = "mlflow-model-dump"
 dbutils.fs.mkdirs(f"gs://{bucket_name}/models")
 dbutils.fs.cp({model_dir}, f"gs://{bucket_name}/models", recurse=True)
