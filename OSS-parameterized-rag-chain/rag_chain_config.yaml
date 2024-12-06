@@ -1,0 +1,18 @@
+llm_model_serving_endpoint_name: lol-zephyr-7b-beta
+llm_model_huggingface: HuggingFaceH4/zephyr-7b-beta
+llm_tokenizer_huggingface: HuggingFaceH4/zephyr-7b-beta
+llm_prompt_template: "You are an assistant that answers questions. Use the following
+  pieces of retrieved context to answer the question. Some pieces of context may be
+  irrelevant, in which case you should not use them to form the answer.\n\nContext:
+  {context}"
+faiss_embedding_model: sentence-transformers/all-MiniLM-L6-v2
+faiss_embedding_model_dbfs_cache_dir: /dbfs/Users/jon.cheung@databricks.com/sasb/serialization/all-MiniLM-L6-v2
+faiss_dbfs_cache_dir: /dbfs/Users/jon.cheung@databricks.com/sasb/serialization-sample/faiss_index
+registered_model_name: lol-rag-chain-faiss
+# vector_search_endpoint_name: dbdemos_vs_endpoint
+# vector_search_source_table_name: databricks_documentation
+# vector_search_index_table_name: databricks_documentation_vs_index
+# catalog: main 
+# db: jcmodels
+MODEL_NAME_FQN: main.jcmodels.basic_rag_demo
+DATABRICKS_SITEMAP_URL: https://docs.databricks.com/en/doc-sitemap.xml
