@@ -7,6 +7,17 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+
+# mlflow.langchain.autolog()
+# model_config = mlflow.models.ModelConfig(development_config='../rag_chain_config.yaml')
+import yaml
+with open('../rag_chain_config.yaml', 'r') as f:
+    configs = yaml.load(f, Loader=yaml.SafeLoader)
+
+configs
+
+# COMMAND ----------
+
 import os
 from langchain.vectorstores import FAISS
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -19,10 +30,6 @@ import mlflow
 
 mlflow.set_registry_uri('databricks')
 
-mlflow.langchain.autolog()
-
-model_config = mlflow.models.ModelConfig(development_config='../rag_chain_config.yaml')
-
 def load_retriever(persist_directory):
   embeddings = HuggingFaceEmbeddings(model_name=model_config.get("faiss_embedding_model"),
                                       cache_folder=model_config.get("faiss_embedding_model_dbfs_cache_dir"))
@@ -32,30 +39,27 @@ def load_retriever(persist_directory):
                                       allow_dangerous_deserialization=True)
   return faiss_index.as_retriever()
 
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
+retriever = load_retriever(model_config.get("faiss_dbfs_cache_dir"))
 prompt = hub.pull("rlm/rag-prompt-mistral")
-
 llm = ChatDatabricks(endpoint=model_config.get("llm_model_serving_endpoint_name"))
 
+
+rag_chain_from_docs = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# use this line if you plan to use a separate notebook as a driver to log and deploy the agent
+# mlflow.set_model(model=rag_chain_from_docs)
+
 with mlflow.start_run() as run:
-
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
-
-    rag_chain_from_docs = (
-        RunnablePassthrough.assign(context=(lambda x: format_docs(x["context"])))
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    rag_chain_with_source = RunnableParallel(
-        {"context": load_retriever(model_config.get("faiss_dbfs_cache_dir")), "question": RunnablePassthrough()}
-        ).assign(answer=rag_chain_from_docs)
-
-
     model_info = mlflow.langchain.log_model(
-        rag_chain_with_source,
+        rag_chain_from_docs,
         artifact_path="retrieval_qa",
         loader_fn=load_retriever,
         persist_dir=model_config.get("faiss_dbfs_cache_dir"),
@@ -65,18 +69,22 @@ with mlflow.start_run() as run:
 
 # COMMAND ----------
 
-from mlflow import MlflowClient
-
-mlflow.set_registry_uri('databricks')
-client=MlflowClient()
-model_name=model_config.get('registered_model_name')
-model_info=client.search_model_versions(f"name='{model_name}'")
-
-mlflow_model = mlflow.pyfunc.load_model(f"models:/{model_name}/{model_info[0].version}")
+# rag_chain_from_docs.invoke('What is the stock market like today?')
 
 # COMMAND ----------
 
-mlflow_model.predict('What can you tell me about the stock market?')
+# from mlflow import MlflowClient
+
+# mlflow.set_registry_uri('databricks')
+# client=MlflowClient()
+# model_name=model_config.get('registered_model_name')
+# model_info=client.search_model_versions(f"name='{model_name}'")
+
+# mlflow_model = mlflow.pyfunc.load_model(f"models:/{model_name}/{model_info[0].version}")
+
+# COMMAND ----------
+
+# mlflow_model.predict('What can you tell me about the stock market?')
 
 # COMMAND ----------
 

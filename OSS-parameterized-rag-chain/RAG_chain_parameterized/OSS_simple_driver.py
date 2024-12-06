@@ -4,24 +4,33 @@
 
 # COMMAND ----------
 
-import mlflow
-
-
-model_config = mlflow.models.ModelConfig(development_config='../rag_chain_config.yaml')
-
-# COMMAND ----------
-
+import os
 from langchain.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
+import mlflow
 
-embeddings=HuggingFaceEmbeddings(model_name=model_config.get("faiss_embedding_model"))
+mlflow.set_registry_uri('databricks')
+model_config = mlflow.models.ModelConfig(development_config='../rag_chain_config.yaml')
 
-new_vector_store = FAISS.load_local(
-    model_config.get('faiss_dbfs_cache_dir'), embeddings, allow_dangerous_deserialization=True
-)
+def load_retriever(persist_directory):
+  embeddings = HuggingFaceEmbeddings(model_name=model_config.get("faiss_embedding_model"),
+                                      cache_folder=model_config.get("faiss_embedding_model_dbfs_cache_dir"))
+                                   
+  faiss_index = FAISS.load_local(model_config.get("faiss_dbfs_cache_dir"),
+                                      embeddings, 
+                                      allow_dangerous_deserialization=True)
+  return faiss_index.as_retriever()
 
-docs = new_vector_store.similarity_search("money")
-docs[0]
+
+with mlflow.start_run() as run:
+    model_info = mlflow.langchain.log_model(
+        lc_model='simple_rag_chain',
+        artifact_path="retrieval_qa",
+        loader_fn=load_retriever,
+        persist_dir=model_config.get("faiss_dbfs_cache_dir"),
+        registered_model_name=model_config.get("registered_model_name"),
+        model_config='../rag_chain_config.yaml',# Chain configuration 
+        )
 
 # COMMAND ----------
 
