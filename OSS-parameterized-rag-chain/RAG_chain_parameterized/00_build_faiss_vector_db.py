@@ -1,4 +1,10 @@
 # Databricks notebook source
+# MAGIC %md
+# MAGIC ## Build FAISS Vector DB
+# MAGIC Use this script below to build your vector database and save the embeddings + database to DBFS. These two cached items will be used in our RAG solution. 
+
+# COMMAND ----------
+
 # MAGIC %pip install -U --quiet databricks-sdk mlflow-skinny mlflow mlflow[gateway] langchain langchain_core faiss-gpu-cu12 langchain_community transformers langchain_huggingface
 # MAGIC dbutils.library.restartPython()
 
@@ -104,8 +110,11 @@ vector_store.save_local(model_config.get('faiss_dbfs_cache_dir'))
 
 # COMMAND ----------
 
+# test loading the FAISS vector DB and searching
 new_vector_store = FAISS.load_local(
-    model_config.get('faiss_dbfs_cache_dir'), embeddings, allow_dangerous_deserialization=True
+    model_config.get('faiss_dbfs_cache_dir'),
+     embeddings,
+      allow_dangerous_deserialization=True
 )
 
 docs = new_vector_store.similarity_search("money")
