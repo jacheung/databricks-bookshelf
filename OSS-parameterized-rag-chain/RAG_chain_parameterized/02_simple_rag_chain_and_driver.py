@@ -152,6 +152,8 @@ endpoint = client.create_endpoint(
     }
 )
 
+
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -159,7 +161,7 @@ endpoint = client.create_endpoint(
 # MAGIC
 # MAGIC Currently we log with the `pyfunc` model flavor above. This gives us the benefit of attaching artifacts that can be used by the inference model (e.g. the FAISS vector database). However, this method of logging doesn't give us visibility into how the chain is operating. 
 # MAGIC
-# MAGIC Logging the model as a `langchain` model flavor gives us this benefit. We get to see each item that's passed to the next component and the run time for each part of the chain as well. This helps us diagnose bottlenecks. However, one downside is that this mlflow flavor does not allow us to attach artifacts, which is unfortunate for our use-case. Once you have UC-enabled and are able to utilize Vector Endpoints, we can revisit the below for improved auditability. 
+# MAGIC Logging the model as a `langchain` model flavor gives us this benefit. We get to see each item that's passed to the next component and the run time for each part of the chain as well. This helps us diagnose bottlenecks. However, one downside is that this mlflow flavor does not allow us to attach artifacts, which is unfortunate for our use-case. Instead, it looks like you have to build the vector DB using a temp directory so that mlflow picks it up. See [here](https://github.com/mlflow/mlflow/blob/master/examples/langchain/retrieval_qa_chain.py). Once you have UC-enabled and are able to utilize Vector Endpoints, we can revisit the below for improved auditability. 
 
 # COMMAND ----------
 

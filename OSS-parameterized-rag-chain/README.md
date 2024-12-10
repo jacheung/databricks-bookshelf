@@ -15,5 +15,3 @@ There are three simple steps:
 2. Run the `00_build_faiss_vector_db.py` notebook to build a FAISS vector DB and store it in DBFS.
 3. Run the `01_completions_deployment` notebook to deploy a completions model with provisioned throughput. Note that you may have to make some adjustments to this for your desired throughput. 
 3. The `02_simple_rag_chain_and_driver.py` notebook builds, logs, registers, and deploys your RAG chain. It connects your RAG chain to your completions endpoint and pulls the vector database from DBFS into the model artifacts to be used during inference. 
-
-One small note. Currently deployment with the config is running into the issues but I'm investigating it now. 

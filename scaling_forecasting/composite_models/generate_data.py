@@ -12,7 +12,7 @@ import pandas as pd
 
 # COMMAND ----------
 
-groups = 100000
+groups = 5000
 n_features_per_group = 10
 n_samples_per_group = 200
 
