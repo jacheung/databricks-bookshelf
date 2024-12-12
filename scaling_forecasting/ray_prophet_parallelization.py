@@ -10,6 +10,17 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## Setup:
+# MAGIC * DBR 15.4 LTS
+# MAGIC * Multi-node cluster
+# MAGIC   * driver: 32GB 8-cores 
+# MAGIC   * workers x8: 64GB 16-cores each
+# MAGIC * Enable autoscaling; min 2 workers and max 8 workers
+# MAGIC
+
+# COMMAND ----------
+
 # MAGIC %pip install --quiet skforecast
 # MAGIC dbutils.library.restartPython()
 
@@ -104,41 +115,54 @@ setup_ray_cluster(
 import pandas as pd
 from prophet import Prophet
 import pickle
+import mlflow
+import os
+from mlflow.utils.databricks_utils import get_databricks_env_vars
 
-# Here we transform our training code to one that works with Ray. We simply add a @ray.remote decorator to the function
+experiment_name = '/Users/jon.cheung@databricks.com/ray_prophet'
+mlflow.set_experiment(experiment_name)
+mlflow_db_creds = get_databricks_env_vars("databricks")
+
+# Here we transform our training code to one that works with Ray. We simply add a @ray.remote decorator to the function along with some mlflow logging parameters. 
 @ray.remote
 def train_and_inference_prophet(train_data:pd.DataFrame, 
                                 store_id:int, 
                                 item_id:int, 
-                                horizon: int):
-  selected_data = train_data.loc[(train_data['store'] == store_id) & (train_data['item'] == item_id)]
-  m = Prophet(daily_seasonality=True)
-  m.fit(train_data)
-  future = m.make_future_dataframe(periods=horizon)
-  forecast = m.predict(future)
-  # if you'd like to return the model object, you can uncomment the following line
-  # serialized_prophet = pickle.dumps(m)
-  return forecast
+                                horizon:int
+                                ):
+        selected_data = train_data.loc[(train_data['store'] == store_id) & (train_data['item'] == item_id)]
+        # Set mlflow credentials and active MLflow experiment within each Ray task
+        os.environ.update(mlflow_db_creds)
+        mlflow.set_experiment(experiment_name)
+
+        with mlflow.start_run(run_name = f"store_{store_id}_item_{item_id}",
+                              nested=True):
+                m = Prophet(daily_seasonality=True)
+                m.fit(train_data)
+                future = m.make_future_dataframe(periods=horizon)
+                forecast = m.predict(future)
+                mlflow.prophet.log_model(pr_model=m,
+                                        artifact_path="prophet_model")
+        return forecast
 
 # Here, the call to the train_and_inference_prophet function creates an object reference. By default, Ray will use a single-CPU per task. Since, Prophet is a bit more compute intensive, we'll increase the number of CPUs to 2.
 # Using 8 workers (each with 64GB memory and 16 cores; i.e. m5.2xlarge on Azure), we can parallelize our training and inference to 64 tasks in parallel. 
 # Instead of 41 hours for 500 models, our parallelized method takes a little over one hour. 
+
+
+# Start parent run on the main driver process
 forecasts_obj_ref = [train_and_inference_prophet
-                     .options(num_cpus=2)
-                     .remote(train_data=data_prophet, 
-                             store_id=combo[0],
-                             item_id=combo[1], 
-                             horizon=14
-                             ) 
-                     for combo in combinations]
+                .options(num_cpus=2)
+                .remote(train_data=data_prophet, 
+                        store_id=combo[0],
+                        item_id=combo[1], 
+                        horizon=14
+                        ) 
+                for combo in combinations[:80]]
 
 # We need to call ray.get() on the referenced object to create a blocking call. 
 # Blocking call is one which will not return until the action it performs is complete.
 forecasts = ray.get(forecasts_obj_ref)
-
-# COMMAND ----------
-
-data_prophet
 
 # COMMAND ----------
 
