@@ -95,6 +95,19 @@ print(elapsed)
 
 # COMMAND ----------
 
+# MAGIC %md 
+# MAGIC ## Parallelize Prophet Forecasting
+# MAGIC We will parallelize our forecasting by leveraging Ray Core. 
+# MAGIC
+# MAGIC Simply, we will create worker nodes that mirror the configuration of our multi-node cluster. Each worker node in our c cluster has 16 CPUs and we will allocate 2 CPUs per actor. Each actor is runs one iteration of our Ray Core task. 
+# MAGIC
+# MAGIC Below is an image of how we're parallelizing. In short, we're training 64 models in parallel.
+# MAGIC ![](images/prophet_parallelization.jpg)
+# MAGIC
+# MAGIC
+
+# COMMAND ----------
+
 import ray
 from ray.util.spark import setup_ray_cluster, shutdown_ray_cluster
 
@@ -112,6 +125,11 @@ setup_ray_cluster(
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC
+
+# COMMAND ----------
+
 import pandas as pd
 from prophet import Prophet
 import pickle
@@ -123,12 +141,13 @@ experiment_name = '/Users/jon.cheung@databricks.com/ray_prophet'
 mlflow.set_experiment(experiment_name)
 mlflow_db_creds = get_databricks_env_vars("databricks")
 
-# Here we transform our training code to one that works with Ray. We simply add a @ray.remote decorator to the function along with some mlflow logging parameters. 
+# Here we transform our training code to one that works with Ray. We simply add a @ray.remote decorator to the function along with some mlflow logging parameters for a nested child runs
 @ray.remote
 def train_and_inference_prophet(train_data:pd.DataFrame, 
                                 store_id:int, 
                                 item_id:int, 
-                                horizon:int
+                                horizon:int,
+                                parent_run_id:str
                                 ):
         selected_data = train_data.loc[(train_data['store'] == store_id) & (train_data['item'] == item_id)]
         # Set mlflow credentials and active MLflow experiment within each Ray task
@@ -136,33 +155,34 @@ def train_and_inference_prophet(train_data:pd.DataFrame,
         mlflow.set_experiment(experiment_name)
 
         with mlflow.start_run(run_name = f"store_{store_id}_item_{item_id}",
-                              nested=True):
+                              parent_run_id=parent_run_id):
                 m = Prophet(daily_seasonality=True)
                 m.fit(train_data)
                 future = m.make_future_dataframe(periods=horizon)
                 forecast = m.predict(future)
                 mlflow.prophet.log_model(pr_model=m,
-                                        artifact_path="prophet_model")
+                                         artifact_path="prophet_model")
         return forecast
 
 # Here, the call to the train_and_inference_prophet function creates an object reference. By default, Ray will use a single-CPU per task. Since, Prophet is a bit more compute intensive, we'll increase the number of CPUs to 2.
 # Using 8 workers (each with 64GB memory and 16 cores; i.e. m5.2xlarge on Azure), we can parallelize our training and inference to 64 tasks in parallel. 
 # Instead of 41 hours for 500 models, our parallelized method takes a little over one hour. 
 
+with mlflow.start_run(run_name="prophet_models_241212") as parent_run: 
+        # Start parent run on the main driver process
+        forecasts_obj_ref = [train_and_inference_prophet
+                        .options(num_cpus=2)
+                        .remote(train_data=data_prophet, 
+                                store_id=combo[0],
+                                item_id=combo[1], 
+                                horizon=14,
+                                parent_run_id=parent_run.info.run_id
+                                ) 
+                        for combo in combinations]
 
-# Start parent run on the main driver process
-forecasts_obj_ref = [train_and_inference_prophet
-                .options(num_cpus=2)
-                .remote(train_data=data_prophet, 
-                        store_id=combo[0],
-                        item_id=combo[1], 
-                        horizon=14
-                        ) 
-                for combo in combinations[:80]]
-
-# We need to call ray.get() on the referenced object to create a blocking call. 
-# Blocking call is one which will not return until the action it performs is complete.
-forecasts = ray.get(forecasts_obj_ref)
+        # We need to call ray.get() on the referenced object to create a blocking call. 
+        # Blocking call is one which will not return until the action it performs is complete.
+        forecasts = ray.get(forecasts_obj_ref)
 
 # COMMAND ----------
 
