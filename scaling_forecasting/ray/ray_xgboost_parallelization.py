@@ -152,6 +152,8 @@ setup_ray_cluster(
 
 # MAGIC %md
 # MAGIC ### 3b. Use Ray Tune to parallelize hyperparameter search
+# MAGIC
+# MAGIC ![](images/xgboost_ray_tune.jpg)
 
 # COMMAND ----------
 
@@ -226,6 +228,8 @@ results.get_best_result(metric="rmse",
 # MAGIC After hyperparameter tuning, we now have our best configuration. However, we can't just grab the best hyperparameter tuned model because that model was only trained using a subset of the data. We will now use the full dataset and the best configuration to train the final model. 
 # MAGIC
 # MAGIC We will use `ray_xgboost` to train our final model, assuming the final dataset is massive and will require multi-node distributed training. In our toy dataset, 810k rows of data x 1k features trained in 5 minutes on 2 actors with 16 CPU each.
+# MAGIC
+# MAGIC ![](images/xgboost_ddp.jpg)
 
 # COMMAND ----------
 
