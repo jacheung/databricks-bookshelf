@@ -112,7 +112,7 @@ import ray
 from ray.util.spark import setup_ray_cluster, shutdown_ray_cluster
 
 # The recommended configuration for a Ray cluster is as follows:
-# - set the num_cpus_per_node to the CPU count per worker node ( ith this configuration, each Apache Spark worker node launches one Ray worker node that will fully utilize the resources of each Apache Spark worker node.)
+# - set the num_cpus_per_node to the CPU count per worker node (with this configuration, each Apache Spark worker node launches one Ray worker node that will fully utilize the resources of each Apache Spark worker node.)
 # - set min_worker_nodes to the number of Ray worker nodes you want to launch on each node.
 # - set max_worker_nodes to the total amount of worker nodes (this and `min_worker_nodes` together enable autoscaling)
 setup_ray_cluster(
@@ -120,13 +120,51 @@ setup_ray_cluster(
   max_worker_nodes=8,
   num_cpus_per_node=16,
   num_gpus_worker_node=0,
-  collect_log_to_path="/dbfs/Users/jon.cheung@databricks.com/ray_collected_logs"
+  collect_log_to_path="/dbfs/Users/jon.cheung@databricks.com/ray_collected_logs",
+  RAY_memory_monitor_refresh_ms=0,
 )
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC
+
+# COMMAND ----------
+
+
+def create_time_series_plot(pd_dataframe: pd.DataFrame):
+    """
+    Create a time series plot of weekly aggregate sales.
+
+    This function takes a pandas dataframe with a datetime column 'ds' and a value column 'y',
+    resamples the data to a weekly frequency, and plots the aggregated weekly sums.
+
+    Parameters:
+    ----------
+    pd_dataframe : pd.DataFrame
+        The input pandas dataframe containing the time series data with columns 'ds' (datetime) and 'y' (values).
+
+    Returns:
+    -------
+    matplotlib.figure.Figure
+        A matplotlib figure object containing the time series plot of weekly aggregate sales.
+    """
+    df_copy = pd_dataframe.copy()
+    df_copy["ds"] = pd.to_datetime(df_copy["ds"])
+    df_copy.set_index("ds", inplace=True)
+    df_weekly = df_copy["y"].resample("W").sum()
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(df_weekly.index, df_weekly.values)
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Sum of y")
+    ax.set_title("Weekly aggregate sales plot")
+    ax.grid(True)
+
+    plt.close()
+
+    return fig
+
 
 # COMMAND ----------
 
@@ -156,6 +194,12 @@ def train_and_inference_prophet(train_data:pd.DataFrame,
 
         with mlflow.start_run(run_name = f"store_{store_id}_item_{item_id}",
                               parent_run_id=parent_run_id):
+                historical_sales = create_time_series_plot(selected_data)
+                mlflow.log_figure(historical_sales, "plots/historical_sales.png")
+
+                dataset = mlflow.data.from_pandas(selected_data)
+                mlflow.log_input(dataset)
+                
                 m = Prophet(daily_seasonality=True)
                 m.fit(train_data)
                 future = m.make_future_dataframe(periods=horizon)
@@ -168,7 +212,7 @@ def train_and_inference_prophet(train_data:pd.DataFrame,
 # Using 8 workers (each with 64GB memory and 16 cores; i.e. m5.2xlarge on Azure), we can parallelize our training and inference to 64 tasks in parallel. 
 # Instead of 41 hours for 500 models, our parallelized method takes a little over one hour. 
 
-with mlflow.start_run(run_name="prophet_models_241212") as parent_run: 
+with mlflow.start_run(run_name="prophet_models_250115") as parent_run: 
         # Start parent run on the main driver process
         forecasts_obj_ref = [train_and_inference_prophet
                         .options(num_cpus=2)

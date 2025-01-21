@@ -1,10 +1,12 @@
 # Databricks notebook source
 # MAGIC %md 
-# MAGIC ## Parallelizing XGBoost with Ray
+# MAGIC ## Scaling XGBoost with Ray
 # MAGIC
-# MAGIC XGBoost is one of the most common and powerful boosting models out there; it can be used for both regression and classification problems. Amidst its powerful feature set, there are drawbacks with training time and the requirement to perform extensive hyperparameter search to reduce overfitting. To meet this compute demand, XGBoost natively leverages hyper-threading, allowing it to use all the CPU cores on a single-machine. However, what if hyper-threading is not enough?
+# MAGIC XGBoost is one of the most common and powerful boosting library out there; it can be used for both regression and classification problems. Amidst its powerful feature set, there are drawbacks with training time and the requirement to perform extensive hyperparameter search to reduce overfitting. To meet this compute demand, XGBoost natively leverages multi-threading, allowing it to use all the CPU cores on a single-machine. However, what if multi-threading on a single-node is not fast enough?
 # MAGIC
-# MAGIC Here comes Ray to the rescue. Ray offers a distributed version of XGBoost to further reduce computing time. With drop-in replacements of `xgboost` native classes, `xgboost_ray` allows you to leverage multi-node clusters to further distribute your training. For example, instead of using 16 cores in a single-node, `xgboost_ray` allows you to scale that up to a multi-node cluster, leveraging 16 cores PER node to further reduce training time. 
+# MAGIC Here comes Ray to the rescue. Ray offers two solutions to speed up the ML Lifecycle for XGBoost, both of which will be demonstrated in this notebook:
+# MAGIC 1. Ray Tune for parallelized hyperparameter tuning.
+# MAGIC 2. A distributed version of XGBoost, `xgboost_ray` to perform distributed data parallelism. With drop-in replacements of `xgboost` native classes, `xgboost_ray` allows you to leverage multi-node clusters to distribute your training. For example, instead of using 16 cores in a single-node, `xgboost_ray` allows you to scale that up to a multi-node cluster, leveraging 16 cores PER node to reduce training time by sharding the dataset equally across the nodes.
 
 # COMMAND ----------
 
@@ -168,7 +170,7 @@ experiment_name = '/Users/jon.cheung@databricks.com/ray-xgb-hyperparameter-tunin
 # Define a training function to parallelize
 def train_global_forecaster(config):
     # Load a slightly larger dataset
-    data, labels = create_m4_daily(n_series=100)
+    data, labels = create_m4_daily(n_series=500)
     # Split into train and test set
     train_x, test_x, train_y, test_y = train_test_split(data, labels, test_size=0.25)
     # Build input matrices for XGBoost
@@ -197,11 +199,11 @@ param_space = {
     "subsample": tune.uniform(0.5, 1.0)
 }
 
-# By default, Ray Tune uses 1 CPU/trial. XGBoost tends to be compute expensive and leverages hyper-threading so we will utilize all CPUs in a node. Since each of my nodes have 16 CPUs, I'll set the "cpu" parameter to 16. 
+# By default, Ray Tune uses 1 CPU/trial. XGBoost tends to be compute expensive and leverages multi-threading so we will utilize all CPUs in a node. Since each of my nodes has 16 CPUs, I'll set the "cpu" parameter to 16. 
 trainable_with_resources = tune.with_resources(train_global_forecaster, 
                                                {"cpu": 16})
 
-# Run the hyperparameter search for 8 trials. 
+# Run the hyperparameter search for 48 trials. 
 tuner = tune.Tuner(
     trainable_with_resources,
     tune_config=tune.TuneConfig(num_samples=48),
