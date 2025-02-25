@@ -243,7 +243,7 @@ mlflow.set_experiment(experiment_name='/Users/jon.cheung@databricks.com/ray-xgb'
 registered_model_name = "jon_cheung.mmf_m4.xgboost_ray_distributed_training"
 
 # Prepare our dataset by using RayDMatrix
-data, labels = create_m4_daily(n_series=500)
+data, labels = create_m4_daily(n_series=10000)
 train_set = RayDMatrix(data, 
                        labels)
 
@@ -258,10 +258,10 @@ with mlflow.start_run(run_name='final_model_241214'):
         - So I'll allocate num_actors <= 8 and 16 cpus_per_actor. 
         See this doc --> https://xgboost.readthedocs.io/en/stable/tutorials/ray.html#setting-the-number-of-cpus-per-actor
         """
-        clf = RayXGBRegressor()
+        clf = RayXGBRegressor(**final_config)
         clf.fit(X=train_set, 
                 y=None,
-                ray_params=RayParams(num_actors=2,
+                ray_params=RayParams(num_actors=4,
                                      cpus_per_actor=16))
         
         # Create a signature for model input and output enforcement

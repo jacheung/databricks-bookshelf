@@ -215,7 +215,7 @@ def train_and_inference_prophet(train_data:pd.DataFrame,
 with mlflow.start_run(run_name="prophet_models_250115") as parent_run: 
         # Start parent run on the main driver process
         forecasts_obj_ref = [train_and_inference_prophet
-                        .options(num_cpus=2)
+                        .options(num_cpus=1)
                         .remote(train_data=data_prophet, 
                                 store_id=combo[0],
                                 item_id=combo[1], 

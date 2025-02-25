@@ -65,7 +65,7 @@ lgb.plot_metric(results)
 # MAGIC %md 
 # MAGIC ## 2. Parallelize hyperparameter tuning for LightGBM
 # MAGIC To parallelize hyperparameter tuning we will perform two steps:
-# MAGIC - 2a. instantiate a Ray cluster - a Ray cluster is composed of multi-nodes for computing. Since this is Ray on Spark, we can assign `worker_nodes` equal to the number of worker nodes in the Spark cluster and `num_cpus_per_node` to the number of CPUs allocated per worker in the Spark cluster. 
+# MAGIC - 2a. instantiate a Ray cluster - a Ray cluster is composed of multi-nodes for computing. Since this is Ray on Spark, we can assign `min/max worker_nodes` equal to (or less than) the number of worker nodes in the Spark cluster and `num_cpus_per_node` to the number of CPUs allocated per worker in the Spark cluster. 
 # MAGIC - 2b. Use Ray Tune to define and search the hyperparameter space. 
 # MAGIC
 # MAGIC ### 2a. Instantiate a Ray cluster
@@ -80,11 +80,11 @@ lgb.plot_metric(results)
 import ray
 from ray.util.spark import setup_ray_cluster, shutdown_ray_cluster
 
-# The below configuration mirrors my Spark cluster set up. Change this to match your cluster configuration. 
+# The below configuration mirrors my Spark worker cluster set up. Change this to match your cluster configuration. 
 setup_ray_cluster(
-  min_worker_nodes=1,
-  max_worker_nodes=4,
-  num_cpus_per_node=64,
+  min_worker_nodes=2,
+  max_worker_nodes=8,
+  num_cpus_per_node=16,
   num_gpus_worker_node=0,
   collect_log_to_path="/dbfs/Users/jon.cheung@databricks.com/ray_collected_logs"
 )
@@ -166,9 +166,9 @@ def train_global_forecaster(config: dict,
     # Return evaluation results back to driver node
     train.report({"rmse": rmse, "done": True})
 
-# By default, Ray Tune uses 1 CPU/trial. LightGBM leverages hyper-threading so we will utilize all CPUs in a node per instance. Since I've set up my nodes to have 16 CPUs each, I'll set the "cpu" parameter to 16. 
+# By default, Ray Tune uses 1 CPU/trial. LightGBM leverages hyper-threading so we will utilize all CPUs in a node per instance. Since I've set up my nodes to have 64 CPUs each, I'll set the "cpu" parameter to 64. Feel free to tune this down if you're seeing that you're not utilizing all the CPUs in the cluster. 
 trainable_with_resources = tune.with_resources(train_global_forecaster, 
-                                               {"cpu": 64})
+                                               {"cpu": 16})
 
 # Define the hyperparameter search space.
 param_space = {
