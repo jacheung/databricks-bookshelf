@@ -51,7 +51,7 @@ features.repartition(num_cpu_cores, data_grain)
 
 def fit_group_models_udf(dbfs_file_path, group_data: pd.DataFrame):
   """
-  This funcion is intended to be used with functools library to pass in
+  This function is intended to be used with functools library to pass in
   parameters other than the Spark DataFrame on which it is applied.
 
   Example: pandas_udf = functools.partial(fit_group_models, "/dbfs/Shared/grouped_models", "/Shared/grouped_experiments", "b2784999872w")
