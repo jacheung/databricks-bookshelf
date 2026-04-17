@@ -62,6 +62,26 @@ Key point to make in the narrative: this model is memory-trivial on any modern c
 
 ---
 
+## 6 — Tower Architecture Progression: Simple → Complex
+
+**What:** Expand the two-tower model section into an explicit instructional arc that walks users from the current minimal architecture to a production-grade design, paired with a large dataset and multi-GPU training.
+
+**Progression to document:**
+
+| Stage | Architecture | When to use |
+|---|---|---|
+| **1 — Current** | `[ID emb ‖ features] → 2-layer MLP → L2-norm` | Small dataset (<100K users), few features, fast iteration |
+| **2 — Separate branches** | ID emb and feature vector processed by separate sub-MLPs before merge | Feature set is heterogeneous; don't want dense feature gradients drowning embedding signal |
+| **3 — Deeper + residual** | 3-4 layer MLP with residual connections, BatchNorm | Larger dataset; training instability or underfitting observed |
+| **4 — Gating** | Learned sigmoid gate over feature vector before concat | Many features of uneven quality; let model suppress noise |
+| **5 — Asymmetric + dropout** | Deeper user tower than item tower, dropout on both | Millions of users; ID embedding starts memorising without regularisation |
+
+**Why deferred:** Requires the large synthetic dataset (Parking Lot item 4: 50K users, 150K orders) and multi-GPU cluster to make the deeper architectures meaningful. On 2K users/18 items a 4-layer tower with gating just overfits — the lesson only lands when the model actually needs the capacity.
+
+**Entry point:** `03_two_tower.ipynb` Cell 14 (model definition) — replace the symmetric 2-layer towers with a configurable `tower_depth` and `use_gating` flag in the config cell, then add a markdown cell before the model definition that narrates the progression.
+
+---
+
 ## 2 — Vector Search Serving for Two-Tower Model (`03_two_tower.ipynb`)
 
 **What:** Replace the precomputed top-K Lakebase lookup with real-time ANN (approximate nearest neighbor) search over item embeddings at serve time.
