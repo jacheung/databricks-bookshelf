@@ -4,19 +4,7 @@ Items deferred for future work. Reference these before starting new sessions on 
 
 ---
 
-## ~~1 — Enrich Training Data with Item Features~~ ✓ Done
-
-> Completed: `item_catalog` and `user_features` tables added to `00_data_preparation.ipynb` Section 3. Notebook 03 Section 1 joins these for two-tower feature enrichment.
-
----
-
-## ~~1 — Wire Feature Tables into Notebook 03 Data Prep (`03_two_tower.ipynb`)~~ ✓ Done
-
-> Completed: `item_catalog` and `user_features` joined in Section 1. `UserTower` and `ItemTower` each accept `[id_embedding ‖ feature_vector]` concat as input. Feature tensors constructed from vocab tables for eval and precompute.
-
----
-
-## 3 — Temporal Train/Test Split
+## 1 — Temporal Train/Test Split
 
 **What:** Replace the current random 80/20 split with a temporal split — train on the earliest 80% of each user's orders, test on the most recent 20%. More realistic evaluation that simulates predicting what a user will buy next.
 
@@ -26,7 +14,7 @@ Items deferred for future work. Reference these before starting new sessions on 
 
 ---
 
-## 4 — Scale Synthetic Data + Widen Two-Tower Model
+## 2 — Scale Synthetic Data + Widen Two-Tower Model
 
 **What:** Two changes to stress the A10 GPUs and make DDP meaningful:
 1. Increase synthetic data in `00_data_preparation.ipynb`: `num_users = 50_000`, `num_orders = 50_000` → ~150K interaction pairs, ~150 steps/epoch
@@ -40,7 +28,7 @@ Items deferred for future work. Reference these before starting new sessions on 
 
 ---
 
-## 5 — Add Compute Sizing Narrative to Notebook 03
+## 3 — Add Compute Sizing Narrative to Notebook 03
 
 **What:** Bake the model size and cluster headroom analysis into a markdown cell in `03_two_tower.ipynb` — likely as a callout at the top of Section 2 (Ray Cluster Setup), before the `setup_ray_cluster` call.
 
@@ -62,7 +50,7 @@ Key point to make in the narrative: this model is memory-trivial on any modern c
 
 ---
 
-## 6 — Tower Architecture Progression: Simple → Complex
+## 4 — Tower Architecture Progression: Simple → Complex
 
 **What:** Expand the two-tower model section into an explicit instructional arc that walks users from the current minimal architecture to a production-grade design, paired with a large dataset and multi-GPU training.
 
@@ -76,21 +64,6 @@ Key point to make in the narrative: this model is memory-trivial on any modern c
 | **4 — Gating** | Learned sigmoid gate over feature vector before concat | Many features of uneven quality; let model suppress noise |
 | **5 — Asymmetric + dropout** | Deeper user tower than item tower, dropout on both | Millions of users; ID embedding starts memorising without regularisation |
 
-**Why deferred:** Requires the large synthetic dataset (Parking Lot item 4: 50K users, 150K orders) and multi-GPU cluster to make the deeper architectures meaningful. On 2K users/18 items a 4-layer tower with gating just overfits — the lesson only lands when the model actually needs the capacity.
+**Why deferred:** Requires the large synthetic dataset (item 2: 50K users, 150K orders) and multi-GPU cluster to make the deeper architectures meaningful. On 2K users/18 items a 4-layer tower with gating just overfits — the lesson only lands when the model actually needs the capacity.
 
 **Entry point:** `03_two_tower.ipynb` Cell 14 (model definition) — replace the symmetric 2-layer towers with a configurable `tower_depth` and `use_gating` flag in the config cell, then add a markdown cell before the model definition that narrates the progression.
-
----
-
-## 2 — Vector Search Serving for Two-Tower Model (`03_two_tower.ipynb`)
-
-**What:** Replace the precomputed top-K Lakebase lookup with real-time ANN (approximate nearest neighbor) search over item embeddings at serve time.
-
-**Approach:**
-- Store item embeddings in a Databricks Vector Search index (Delta Sync index on `two_tower_item_embeddings` table)
-- At serve time: look up user embedding from Lakebase (or recompute from the user tower), query the Vector Search index for top-K nearest items
-- Enables personalization for new/updated user signals without re-running the full precompute pipeline
-
-**Why deferred:** The precomputed approach is simpler and matches the serving pattern already established in notebooks 01 and 02. Vector Search adds operational complexity (index sync latency, embedding versioning) that is only warranted at scale or when real-time personalization is needed.
-
-**Entry point:** `03_two_tower.ipynb` Section 6 — replace the Lakebase precomputed recs table with a Vector Search index creation + a new pyfunc that calls `VectorSearchClient.get_index().similarity_search()` at predict time.
