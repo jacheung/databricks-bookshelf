@@ -15,8 +15,11 @@ Shared infrastructure — you pay only for tokens consumed, with no capacity to 
 | Output cost | $0.60 / 1M tokens |
 | Max input throughput | 200,000 tokens/min |
 | Max output throughput | 10,000 tokens/min |
+| Max QPM | ~200 QPS (workspace limit — confirm with Databricks engineering) |
 
 Note the 20:1 ratio between input and output limits — this reflects the underlying compute asymmetry between prefill and decode, and is why "tokens per second" as a single number is a misleading capacity metric (see below).
+
+In practice, **QPM is rarely the binding constraint**. The output token ceiling already caps effective QPM so low (see table below) that a workspace QPM limit would only become relevant for workloads with very short outputs — classification, routing, yes/no answers — where OTPM isn't the bottleneck but request frequency is high.
 
 ### Provisioned Throughput (PT)
 Dedicated inference capacity measured in **model units**, billed hourly regardless of usage. You get a guaranteed throughput floor and a burst scaling mechanism that can temporarily step up to the next model unit increment (e.g., 50 → 100 units) when capacity is available.
@@ -33,14 +36,16 @@ A single TPS number collapses two fundamentally different constraints — input 
 
 The PPT limits make this concrete: 200,000 input tokens/min vs 10,000 output tokens/min — a 20:1 ratio. **Output throughput is almost always the binding constraint.** A workload generating long responses will hit the output ceiling long before it approaches the input ceiling.
 
-Two workloads with identical total tokens behave very differently:
+Two workloads with identical total tokens behave very differently. Working through the math against the GPT OSS 120B PPT limits:
 
-| Workload | Input | Output | Binding constraint |
-|---|---|---|---|
-| RAG / Q&A | 2,000 | 200 | Input ceiling (high volume, short answers) |
-| Code / summarization | 200 | 2,000 | Output ceiling (long generations) |
+| Workload | Input | Output | ITPM ceiling | OTPM ceiling | Binding constraint | Effective QPM |
+|---|---|---|---|---|---|---|
+| RAG / Q&A | 2,000 | 200 | 200,000 ÷ 2,000 = 100 QPM | 10,000 ÷ 200 = 50 QPM | **OTPM** | 50 QPM |
+| Code / summarization | 200 | 2,000 | 200,000 ÷ 200 = 1,000 QPM | 10,000 ÷ 2,000 = 5 QPM | **OTPM** | 5 QPM |
 
-**Size against your input and output limits separately, not a combined TPS number.**
+OTPM is the binding constraint for both — even for RAG with its short outputs. At 50 QPM for RAG and 5 QPM for code summarization, most production workloads will outgrow PPT quickly.
+
+**Size against your output token ceiling first. It will bind before anything else.**
 
 ---
 
@@ -161,7 +166,6 @@ Requests always go to PT first. On capacity errors the client automatically retr
 
 | File | Purpose |
 |---|---|
-| `config.yml` | All configurable parameters — endpoint names, pricing inputs, deployment settings |
-| `profile_workload.ipynb` | Step 1 — Profile your workload on PPT: measure input/output tokens, TTFT, TPOT |
-| `capacity_deployment.ipynb` | Step 2 — Size (via pricing calculator) and deploy your PT endpoint |
-| `query_endpoint.ipynb` | Step 3 — Query PT endpoint with PPT fallback |
+| `config.yml` | All configurable parameters — endpoint names and serving settings |
+| `profile_workload.ipynb` | Profile your workload on PPT: measure input/output tokens, TTFT, TPOT |
+| `query_endpoint.ipynb` | Query PT endpoint with PPT fallback |
