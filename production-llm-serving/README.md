@@ -53,15 +53,27 @@ OTPM is the binding constraint for both — even for RAG with its short outputs.
 
 ### 1. Is PPT Enough?
 
-Before committing to PT, run your workload on PPT and measure:
+**Step 1 — Profile per-request token shape using `profile_workload.ipynb`**
+
+The notebook measures per-request metrics against a PPT endpoint:
 - Average input tokens per request
 - Average output tokens per request
-- Sustained ITPM and OTPM at typical load
-- Peak ITPM and OTPM
+- TTFT and TPOT (latency characteristics)
 
-Use `profile_workload.ipynb` to collect these. Do not guess — real distributions are rarely what you expect, and input/output ratios vary significantly by use case.
+Do not guess — real distributions are rarely what you expect, and input/output ratios vary significantly by use case.
 
-Then compare your measured sustained load against the PPT ceilings **separately for input and output**:
+**Step 2 — Derive ITPM and OTPM**
+
+ITPM and OTPM can't be measured from profiling alone. They require QPM, which comes from your production traffic or estimation (see Section 2). Once you have QPM:
+
+```
+ITPM = avg_input_tokens_per_request  × QPM
+OTPM = avg_output_tokens_per_request × QPM
+```
+
+**Step 3 — Compare against PPT ceilings**
+
+Check ITPM and OTPM separately against the PPT limits for your model:
 
 - **Both below ceiling:** Stay on PPT. No PT needed. Done.
 - **Either at or above ceiling:** PT is required — not as a cost optimization, but because PPT physically cannot serve your load.
