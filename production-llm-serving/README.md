@@ -51,24 +51,24 @@ OTPM is the binding constraint for both — even for RAG with its short outputs.
 
 ## How to Size for Production
 
-### Step 1 — Profile your workload on PPT first
+### 1. Is PPT Enough?
 
 Before committing to PT, run your workload on PPT and measure:
 - Average input tokens per request
 - Average output tokens per request
-- Sustained input tokens/min and output tokens/min at typical load
-- Peak input tokens/min and output tokens/min
+- Sustained ITPM and OTPM at typical load
+- Peak ITPM and OTPM
 
-Do not guess. Real distributions are rarely what you expect — and input/output ratios vary significantly by use case.
+Use `profile_workload.ipynb` to collect these. Do not guess — real distributions are rarely what you expect, and input/output ratios vary significantly by use case.
 
-### Step 2 — Is PPT enough?
-
-Compare your measured sustained load against the PPT ceilings **separately for input and output**. Either limit can be the binding constraint depending on your workload.
+Then compare your measured sustained load against the PPT ceilings **separately for input and output**:
 
 - **Both below ceiling:** Stay on PPT. No PT needed. Done.
 - **Either at or above ceiling:** PT is required — not as a cost optimization, but because PPT physically cannot serve your load.
 
-### Step 3 — Determine your QPM
+### 2. Size Your PT Endpoint
+
+#### Determine your QPM
 
 QPM is a demand metric — it comes from your application traffic, not from profiling LLM calls. How you get it depends on your situation.
 
@@ -78,7 +78,7 @@ QPM already exists in your observability stack (Datadog, Grafana, CloudWatch, Da
 
 **Net new workload**
 
-You have to model it from business inputs. The right formula depends on your application type:
+Model it from business inputs. The right formula depends on your application type:
 
 | App type | QPM estimate |
 |---|---|
@@ -89,9 +89,26 @@ You have to model it from business inputs. The right formula depends on your app
 
 These formulas give you an average QPM. Apply a 2–3× safety factor to account for burst patterns and ramp-up.
 
-**What QPM to use in the pricing calculator**
+#### Use the pricing calculator
 
-The calculator asks for one number — but bursty workloads don't have one number. The right input is your **QPM floor**: the sustained load you want to guarantee will never degrade. This is not your average and not your peak.
+Use the **[Databricks GenAI Pricing Calculator](https://www.databricks.com/product/pricing/genai-pricing-calculator)** to get a model unit recommendation. It takes:
+
+- Cloud provider + region
+- Model
+- **Average input tokens** per request
+- **Average output tokens** per request
+- **QPM floor** — your P75–P90, not your average and not your peak
+
+The calculator asks for one number. For bursty workloads that number should be your **QPM floor**: the sustained load you want to guarantee will never degrade. Burst scaling and PPT fallback handle everything above it.
+
+#### Validate empirically
+
+1. Deploy at the recommended model unit level
+2. Load test with traffic that matches your real input/output distribution
+3. Observe where you start seeing 429s — that is your actual capacity ceiling
+4. Adjust model units and repeat if needed
+
+#### Understand your full capacity stack
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -106,42 +123,9 @@ The calculator asks for one number — but bursty workloads don't have one numbe
 └─────────────────────────────────────────────────────┘
 ```
 
-Size your PT provisioning for the floor. Burst scaling handles moderate QPM spikes by automatically stepping up one model unit increment (e.g., 50 → 100 units) when regional capacity is available. PPT fallback handles everything above that — it is your elastic safety net for QPM spikes that neither your provisioned floor nor burst scaling can absorb.
-
-### Step 4 — Size your PT provisioning
-
-Use the **[Databricks GenAI Pricing Calculator](https://www.databricks.com/product/pricing/genai-pricing-calculator)** to get a model unit recommendation. It takes:
-
-- Cloud provider + region
-- Model
-- **Average input tokens** per request
-- **Average output tokens** per request
-- **QPM floor** (P75–P90 of your traffic distribution)
-
-**Then validate empirically:**
-
-1. Deploy at the recommended model unit level
-2. Load test with traffic that matches your real input/output distribution
-3. Observe where you start seeing 429s — that is your actual capacity ceiling
-4. Adjust model units and repeat if needed
-
-### Step 5 — Understand your full capacity stack
-
-For a 50-unit PT endpoint, your capacity in descending order is:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  PPT fallback          ← overflow + 503/429 safety  │
-├─────────────────────────────────────────────────────┤
-│  PT burst (100 units)  ← best-effort, not guaranteed │
-├─────────────────────────────────────────────────────┤
-│  PT provisioned (50 units) ← guaranteed floor        │
-└─────────────────────────────────────────────────────┘
-```
-
 - **PT provisioned** is your guaranteed floor — always available
 - **PT burst** steps up one model unit increment automatically when capacity exists in the region — not guaranteed
-- **PPT fallback** is your safety net when burst isn't available or isn't enough; this is why the blended approach matters even after you move to PT
+- **PPT fallback** is your elastic safety net for QPM spikes that neither the provisioned floor nor burst scaling can absorb
 
 ---
 
