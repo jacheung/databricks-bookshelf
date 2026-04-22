@@ -63,17 +63,55 @@ Compare your measured sustained load against the PPT ceilings **separately for i
 - **Both below ceiling:** Stay on PPT. No PT needed. Done.
 - **Either at or above ceiling:** PT is required — not as a cost optimization, but because PPT physically cannot serve your load.
 
-### Step 3 — Size your PT provisioning
+### Step 3 — Determine your QPM
 
-Use the **[Databricks GenAI Pricing Calculator](https://www.databricks.com/product/pricing/genai-pricing-calculator)** to get a model unit recommendation for your workload shape. It takes:
+QPM is a demand metric — it comes from your application traffic, not from profiling LLM calls. How you get it depends on your situation.
+
+**Existing workload being migrated**
+
+QPM already exists in your observability stack (Datadog, Grafana, CloudWatch, Databricks system tables). Pull the distribution over a representative window (1–2 weeks captures daily and weekly rhythm), then use P75–P90 as your sizing input.
+
+**Net new workload**
+
+You have to model it from business inputs. The right formula depends on your application type:
+
+| App type | QPM estimate |
+|---|---|
+| Chatbot / assistant | `DAU × sessions_per_day × messages_per_session ÷ active_minutes_per_day` |
+| API feature (autocomplete, classification) | `app_requests_per_min × LLM_calls_per_request` |
+| Batch enrichment | `records_per_batch ÷ SLA_window_in_minutes` |
+| RAG pipeline | `user_query_rate_per_min × LLM_calls_per_query` |
+
+These formulas give you an average QPM. Apply a 2–3× safety factor to account for burst patterns and ramp-up.
+
+**What QPM to use in the pricing calculator**
+
+The calculator asks for one number — but bursty workloads don't have one number. The right input is your **QPM floor**: the sustained load you want to guarantee will never degrade. This is not your average and not your peak.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  PPT fallback          ← QPM spikes PPT by itself    │
+│                           cannot handle              │
+├─────────────────────────────────────────────────────┤
+│  PT burst (100 units)  ← moderate QPM spikes above   │
+│                           your provisioned floor     │
+├─────────────────────────────────────────────────────┤
+│  PT provisioned (50 units) ← your QPM floor          │
+│                              (P75–P90, guaranteed)   │
+└─────────────────────────────────────────────────────┘
+```
+
+Size your PT provisioning for the floor. Burst scaling handles moderate QPM spikes by automatically stepping up one model unit increment (e.g., 50 → 100 units) when regional capacity is available. PPT fallback handles everything above that — it is your elastic safety net for QPM spikes that neither your provisioned floor nor burst scaling can absorb.
+
+### Step 4 — Size your PT provisioning
+
+Use the **[Databricks GenAI Pricing Calculator](https://www.databricks.com/product/pricing/genai-pricing-calculator)** to get a model unit recommendation. It takes:
 
 - Cloud provider + region
 - Model
 - **Average input tokens** per request
 - **Average output tokens** per request
-- **Queries per minute (QPM)**
-
-Enter your **P75–P90 load profile** — not your average, not your peak.
+- **QPM floor** (P75–P90 of your traffic distribution)
 
 **Then validate empirically:**
 
@@ -82,7 +120,7 @@ Enter your **P75–P90 load profile** — not your average, not your peak.
 3. Observe where you start seeing 429s — that is your actual capacity ceiling
 4. Adjust model units and repeat if needed
 
-### Step 4 — Understand your full capacity stack
+### Step 5 — Understand your full capacity stack
 
 For a 50-unit PT endpoint, your capacity in descending order is:
 
