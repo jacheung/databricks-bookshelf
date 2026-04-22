@@ -62,21 +62,35 @@ The notebook measures per-request metrics against a PPT endpoint:
 
 Do not guess — real distributions are rarely what you expect, and input/output ratios vary significantly by use case.
 
-**Step 2 — Derive ITPM and OTPM**
+**Step 2 — Determine whether PPT can serve your load**
 
-ITPM and OTPM can't be measured from profiling alone. They require QPM, which comes from your production traffic or estimation (see Section 2). Once you have QPM:
+There are two paths depending on whether you have historical traffic data.
+
+*Path A — You have production QPM data*
+
+Combine your measured token shape with your observed QPM to derive ITPM and OTPM, then compare against the PPT ceilings:
 
 ```
-ITPM = avg_input_tokens_per_request  × QPM
-OTPM = avg_output_tokens_per_request × QPM
+ITPM = avg_input_tokens_per_request  × QPM  →  compare against PPT ITPM ceiling
+OTPM = avg_output_tokens_per_request × QPM  →  compare against PPT OTPM ceiling
 ```
 
-**Step 3 — Compare against PPT ceilings**
+*Path B — No historical data (new workload)*
 
-Check ITPM and OTPM separately against the PPT limits for your model:
+Reverse-calculate the maximum QPM PPT can serve for your measured request shape. `profile_workload.ipynb` does this automatically after the profiling run:
 
-- **Both below ceiling:** Stay on PPT. No PT needed. Done.
-- **Either at or above ceiling:** PT is required — not as a cost optimization, but because PPT physically cannot serve your load.
+```
+max_qpm_from_itpm = PPT_ITPM_ceiling / avg_input_tokens_per_request
+max_qpm_from_otpm = PPT_OTPM_ceiling / avg_output_tokens_per_request
+ppt_max_qpm       = min(max_qpm_from_itpm, max_qpm_from_otpm)  ← binding constraint
+```
+
+This is your PPT capacity ceiling for your specific workload shape. If your expected QPM will exceed it, PT is required.
+
+**Decision:**
+
+- **QPM below `ppt_max_qpm`:** Stay on PPT. No PT needed. Done.
+- **QPM at or above `ppt_max_qpm`:** PT is required — not as a cost optimization, but because PPT physically cannot serve your load.
 
 ### 2. Size Your PT Endpoint
 
