@@ -44,15 +44,15 @@ Dedicated capacity measured in **model units**, billed hourly. Guarantees a thro
 
 ### Step 1 — Profile your workload (`profile_workload.ipynb`)
 
-Run the profiling notebook against a PPT endpoint. It is organized into independent workload cells — run only the ones that match your pattern:
+Fill in the **CUSTOMER CONFIGURATION** cell at the top of the notebook: set `PPT_MODEL`, replace `SYSTEM_PROMPT` with your real system prompt, and populate the sample lists that match your workload:
 
-| Cell | Run if you have… |
+| Sample list | Populate if you have… |
 |---|---|
-| RAG / Retrieval | A vector DB retrieval step that assembles context into the prompt |
-| Multi-turn chat | A conversational assistant with session history |
-| Agentic / tool-calling | An agent that makes multiple LLM calls per request (uses MLflow traces) |
+| `RAG_SAMPLES` | A vector DB retrieval step that assembles context into the prompt |
+| `CHAT_SAMPLES` | A conversational assistant with session history |
+| `TRACE_SAMPLES` | An agent that makes multiple LLM calls per request (uses MLflow traces) |
 
-Mix and match freely — a chatbot that also does RAG should run both cells. Each cell appends to a shared `results` collector that feeds the summary and capacity calculation.
+Leave unused lists as `[]` — those workload cells skip automatically. Then **Run All** cells top to bottom.
 
 Do not estimate token counts — real input/output distributions vary significantly by workload type, and the wrong profile will produce the wrong PT sizing.
 
