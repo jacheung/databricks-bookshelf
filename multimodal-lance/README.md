@@ -64,9 +64,10 @@ Raw videos in Databricks Volumes
        └── Push embeddings → Mosaic Vector Search (retrieval, separate concern)
             │
             ▼
-  [03] ML Training
-       lance.torch.data.LanceDataset (random-access batching)
-       PyTorch training loop
+  [03] Inference + Training (three approaches)
+       Stage 1: VLM structured output (LLaVA via Ray) — best quality, high cost
+       Stage 2: CLIP zero-shot — free, no training, ~75% accuracy
+       Stage 3: CLIP embeddings → trained MLP — production scale, domain-adapted
 ```
 
 ---
@@ -79,7 +80,7 @@ Raw videos in Databricks Volumes
 |----------|-------------|
 | `01_extract_frames_ray.ipynb` | GPU frame extraction → Lance `frames` table (inline JPEG + metadata) |
 | `02_feature_engineering.ipynb` | CLIP embeddings → new Lance dataset version |
-| `03_train_model.ipynb` | PyTorch training with Lance DataLoader; includes Delta vs Lance throughput benchmark |
+| `03_train_model.ipynb` | Three inference strategies — VLM structured output, CLIP zero-shot, trained MLP classifier — with cost/throughput trade-offs and Lance vs Delta benchmark |
 
 ### Optional
 
