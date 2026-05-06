@@ -1,4 +1,4 @@
-# Multimodal Feature Engineering + ML Training with Lance on Databricks
+# Multimodal Image ML Training with Lance on Databricks
 
 <p>
   <img src="https://img.shields.io/badge/Databricks-FF3621?style=flat-square&logo=databricks&logoColor=white" alt="Databricks"/>
@@ -9,43 +9,84 @@
 
 A blueprint demonstrating how the [Lance](https://lancedb.github.io/lance/) columnar format optimizes image-based ML training on Databricks — specifically addressing where Delta/Parquet breaks down for multimodal workloads.
 
-The three foundational image ML problem types — **classification**, **object detection**, and **segmentation** — all share the same core training bottleneck on Databricks: random-access reads of large binary payloads (raw image bytes) from a Parquet-backed store are fundamentally mismatched with how ML training DataLoaders work. This blueprint uses BDD100K dashcam footage and a CNN object detection task to demonstrate the Lance format as the solution, with Ray Data and Ray Train handling distributed training across GPUs.
+The three foundational image ML problem types — **classification**, **object detection**, and **segmentation** — all share the same core training bottleneck on Databricks: random-access reads of large binary payloads (raw image bytes) from a Parquet-backed store are fundamentally mismatched with how ML training DataLoaders work. This blueprint uses BDD100K dashcam footage and a CNN object detection task to demonstrate Lance as the solution, with Ray Data and Ray Train handling distributed training across GPUs.
 
 ---
 
-## Why Lance instead of Delta?
+## The standard Databricks path for ML
 
-Lance is a columnar format purpose-built for ML workloads. On Databricks, Delta is the default — and it works for analytics. But for multimodal training datasets it has a fundamental limitation.
+Delta Lake + Parquet is the right default for most ML workloads on Databricks. It provides Unity Catalog governance, SQL access, Photon-accelerated queries, time-travel, and native integration with MLflow and Feature Store. For tabular features — structured data like user events, transactions, and numerical features — Delta is the correct choice with no caveats.
 
-**The Parquet row-group problem.** Delta stores data in Parquet row groups (~128MB or ~1M rows each). Fetching a single random row requires reading the entire row group it belongs to. For a training DataLoader that samples random batches each step, this means reading orders of magnitude more data than needed. At 10M+ rows — roughly when your dataset outgrows cluster memory and can no longer be cached — this becomes the primary training bottleneck.
+---
 
-**Why 10M rows is the rough threshold:** Below that, you can shuffle the dataset once per epoch in Spark and cache it in memory, paying the scan cost upfront. Above it, the dataset (~1TB+ for image data) can't fit in memory, so every training step hits cold I/O — and Parquet's row-group overhead compounds every batch.
+## Where it breaks for image ML training
 
-Lance solves this with O(1) random access to any row. A batch of 64 frames from a 100M-row table costs the same as a batch from a 1M-row table.
+Image ML training has three requirements that Parquet is architecturally unable to meet efficiently.
+
+### 1. Inline binary is required for CNN training
+
+CNN training needs raw pixels on every batch. The natural alternative — storing a path string pointing to an image file in object storage — reintroduces a per-image I/O hop that Delta cannot eliminate:
+
+```
+Path reference approach (Delta):
+  read Lance/Delta row → get path string → GET /Volumes/.../frame_0001.jpg
+                                            GET /Volumes/.../frame_0002.jpg
+                                            ...64 concurrent requests per batch
+```
+
+At batch size 64 across 100 Ray workers, this produces 6,400 concurrent object storage GET requests per training step. Object storage API rate limits bite (~5,500 GET/s per S3 prefix), per-request latency (~10–100ms) compounds, and the GPU idles waiting on I/O.
+
+### 2. Parquet row groups collapse with inline binary
+
+Delta stores data in Parquet row groups, defaulting to ~128MB or ~1M rows per group. With structured tabular rows (~1KB each), random access costs ~1KB of wasted I/O per sample fetch. With inline image bytes (~100KB/frame), row groups collapse:
+
+| Row type | Row size | Rows per row group | Wasted I/O per random fetch |
+|----------|----------|--------------------|-----------------------------|
+| Tabular features | ~1 KB | ~128,000 | ~1 KB |
+| Inline JPEG frames | ~100 KB | ~1,280 | ~128 MB |
+
+A random batch of 64 frames requires reading 64 × 128MB = **8GB of data** from Parquet to retrieve 64 × 100KB = 6.4MB of actual content. This gets worse as image resolution increases.
+
+### 3. No blob isolation — metadata scans touch image bytes
+
+In Parquet, all columns for a row group are co-located. A query filtering on `video_id` or `timestamp_ms` must scan through the image bytes in that row group to find the rows it needs. There is no way to isolate large binary payloads from structured metadata in Parquet.
+
+---
+
+## Lance: built for this
+
+Lance addresses each failure mode directly.
+
+**Blob layout.** Binary payloads are stored in a dedicated blob file, physically separate from structured metadata columns. A metadata scan on `video_id` or `frame_number` never reads image bytes. When a batch does need image bytes, reads go directly to the blob's byte offset — no row group to scan through.
+
+**Fragment-level O(1) random access.** Lance datasets are composed of independent fragments. Any row in any fragment is addressable by a direct byte-offset seek. The cost of fetching row 1 is identical to fetching row 5,000,000. Batch reads are coalesced into sequential byte-range reads within fragments — no per-image request overhead.
+
+**Arrow-native storage.** Lance stores data in Arrow IPC format internally. Ray Data reads directly into Arrow blocks with no Parquet deserialization step — the CPU cycles that Parquet burns on deserialization go to image augmentation instead.
+
+**Fragment-parallel reads for Ray.** Each Ray worker actor reads its assigned Lance fragment(s) independently. No cross-worker coordination, no shared shuffle state. The data loading pipeline scales linearly with the number of Ray workers.
 
 |  | Lance | Delta |
 |--|-------|-------|
-| Random-access batch sampling | Native, O(1) per row | Row-group scan — expensive at scale |
-| Binary/image storage | Efficient, designed for it | Works, Parquet encoding is wasteful |
-| ML DataLoader integration | Native (`lance.torch.data`) | Requires Petastorm or custom bridge |
+| Random-access batch sampling | O(1) per row, fragment-level addressing | Row-group scan — 128MB per 1,280-row group for images |
+| Inline binary storage | Blob layout — isolated, byte-offset addressed | All columns co-located in row group |
+| Metadata scan with binary columns | Skips blob data entirely | Must traverse binary bytes to find metadata rows |
 | Ray Data integration | `ray.data.read_lance` — Arrow-native, fragment-parallel | `ray.data.read_parquet` — Parquet deserialization overhead |
-| Dataset versioning for ML iteration | First-class (append, delete, evolve schema) | Time-travel is SQL-oriented, not ML-oriented |
 | UC 3-level namespace | Path-based only | Full UC integration |
-| Cluster setup complexity | Needs extra JARs/libs | Zero extra setup |
+| Dataset versioning for ML | First-class — every write is a new version | SQL time-travel, not ML-oriented |
 
 ### Ray Data + Lance
 
 This blueprint uses `ray.data.read_lance` rather than `ray.data.read_databricks_tables` or `ray.data.read_parquet` for three reasons:
 
-**1. Random access without shuffle overhead.** ML training requires continuous data shuffling to prevent overfitting. Parquet forces Ray Data to read entire row groups (~128MB) to retrieve a handful of samples. Lance uses fragment-level addressing that enables O(1) point lookups — [benchmarked by LanceDB](https://lancedb.github.io/lance/) at 100–1000x faster random access than Parquet depending on access pattern. This means Ray Data can shuffle and stream granularly without saturating the network.
+**1. Random access without shuffle overhead.** Parquet forces Ray Data to read entire row groups to retrieve a handful of samples. Lance uses fragment-level addressing for O(1) point lookups — [benchmarked by LanceDB](https://lancedb.github.io/lance/) at 100–1000x faster random access than Parquet depending on access pattern.
 
-**2. Near-zero deserialization overhead.** Ray Data's in-memory engine represents data as Apache Arrow blocks. Parquet requires a read → deserialize → convert-to-Arrow pipeline that burns CPU cycles on every batch. Lance is Arrow-native: it stores data in Arrow IPC format internally, so Ray Data reads directly into Arrow blocks with no deserialization step. That CPU budget goes to preprocessing and augmentation instead.
+**2. Near-zero deserialization overhead.** Lance stores data in Arrow IPC format natively. Ray Data reads directly into Arrow blocks with no Parquet → Arrow conversion step. That CPU budget goes to preprocessing and augmentation instead.
 
-**3. Fragment-parallel reads map to Ray's actor model.** A Lance dataset is composed of independent fragments. Each Ray worker actor reads its assigned fragment(s) with no cross-worker coordination, making data loading embarrassingly parallel. Large binary payloads (image bytes) are stored in a separate blob layout and don't slow down metadata scans — Ray can filter on `video_id` or `timestamp_ms` without touching the image column at all.
+**3. Fragment-parallel reads map to Ray's actor model.** Each Ray worker reads its assigned Lance fragments independently with no cross-worker coordination. Binary payloads (image bytes) are stored in a separate blob layout — a worker loading a batch of embeddings or metadata never touches the image bytes.
 
 ### Unity Catalog and Lance
 
-Lance tables cannot use `catalog.schema.table` SQL syntax — Unity Catalog natively manages only Delta tables. Lance datasets are accessed by path:
+Lance datasets cannot use `catalog.schema.table` SQL syntax — Unity Catalog natively manages only Delta tables. Lance datasets are accessed by path:
 
 ```python
 # ✅ Path-based access
@@ -56,31 +97,38 @@ ds = lance.dataset("/Volumes/main/ml/media/frames/")
 spark.read.table("main.ml.frames")
 ```
 
-Organize Lance datasets inside UC Volumes to retain storage governance and access control. Optionally maintain a thin Delta manifest table in UC that records each Lance dataset's path, row count, and version.
+Organize Lance datasets inside UC Volumes to retain storage governance and access control. Optionally maintain a thin Delta manifest table in UC recording each Lance dataset's path, row count, and version.
+
+---
+
+## Dataset: BDD100K
+
+[BDD100K](https://bdd-data.berkeley.edu/) (Berkeley DeepDrive) is a large-scale driving dataset collected by UC Berkeley.
+
+- **100,000 dashcam videos**, ~40 seconds each, 720p at 30fps
+- **Object detection labels** for 10 categories on a 10K-video subset: car, truck, bus, person, rider, bicycle, motorcycle, traffic light, traffic sign, train — bounding boxes per frame
+- **Video-level labels** for all 100K videos: weather (clear/rainy/foggy/snowy/overcast), scene (city/highway/residential), time of day (day/dawn-dusk/night)
+- **License:** BSD — open for research use
+
+**Scale at 1fps sampling:** ~40 frames/video × 100K videos = ~4M frames. At 3fps: ~12M frames, past the threshold where Lance's random-access advantage over Parquet is measurable in end-to-end training throughput.
 
 ---
 
 ## Architecture
 
 ```
-Raw videos in Databricks Volumes
+BDD100K videos in Databricks Volumes
             │
             ▼
-  [01] Frame Extraction — Ray (GPU)
-       decord/ffmpeg → JPEG bytes inline
+  [01] Create Lance dataset — Ray (GPU)
+       decord → JPEG bytes inline + BDD100K bbox annotations
        lance.write_dataset(frames/, mode="append")
             │
             ▼
-  [02] Feature Engineering — Ray (GPU)
-       CLIP vision encoder → embedding per frame
-       Lance version update (v1 → v2 with embeddings)
-       └── Push embeddings → Mosaic Vector Search (retrieval, separate concern)
-            │
-            ▼
-  [03] Inference + Training (three approaches)
-       Stage 1: VLM structured output (LLaVA via Ray) — best quality, high cost
-       Stage 2: CLIP zero-shot — free, no training, ~75% accuracy
-       Stage 3: CLIP embeddings → trained MLP — production scale, domain-adapted
+  [02] CNN training — Ray Data + Ray Train
+       ray.data.read_lance → preprocessing pipeline → DDP training
+       ResNet-50 + FPN, 10-category object detection
+       Lance vs Delta throughput benchmark + MLflow logging
 ```
 
 ---
@@ -91,9 +139,8 @@ Raw videos in Databricks Volumes
 
 | Notebook | Description |
 |----------|-------------|
-| `01_extract_frames_ray.ipynb` | GPU frame extraction → Lance `frames` table (inline JPEG + metadata) |
-| `02_feature_engineering.ipynb` | CLIP embeddings → new Lance dataset version |
-| `03_train_model.ipynb` | Three inference strategies — VLM structured output, CLIP zero-shot, trained MLP classifier — with cost/throughput trade-offs and Lance vs Delta benchmark |
+| `01_create_lance_dataset.ipynb` | Ray GPU frame extraction from BDD100K → Lance `frames` table (inline JPEG + bounding box labels) |
+| `02_cnn_training.ipynb` | Distributed CNN object detection training via Ray Data + Ray Train; Lance vs Delta throughput benchmark |
 
 ### Optional
 
@@ -116,65 +163,10 @@ Located in `optional/`. Use when you need queryable metadata tables in Unity Cat
 | video_id | string | |
 | frame_number | int32 | 0-indexed |
 | timestamp_ms | int64 | |
-| image | binary | JPEG bytes inline |
+| image | binary | Inline JPEG bytes — blob layout, isolated from metadata |
 | width, height | int32 | |
-| embedding | fixed_size_list\<float32\>[768] | Added in notebook 02 |
-| label | string | Optional annotation |
+| bbox_labels | list\<struct\> | `{category, x1, y1, x2, y2}` per object; joined from BDD100K annotations at write time |
 | extracted_at | timestamp[us] | |
-
-### Dataset versioning
-
-```
-v1  frames: image + metadata only
-v2  + CLIP embedding column      (after notebook 02)
-v3  + human-reviewed labels      (annotation updates)
-v4  + additional feature columns (further FE iterations)
-```
-
-Pin a version for training reproducibility: `lance.dataset(path, version=2)`
-
-### Multi-embedding experimentation
-
-A common pattern during model development is testing several embedding models to find the best one for a downstream task. Lance handles this well due to its fixed-size list encoding and column-projected random access.
-
-**Storage estimate at 10M frames:**
-
-| Model | Dims | Storage |
-|-------|------|---------|
-| CLIP ViT-B/32 | 512 | ~20 GB |
-| CLIP ViT-L/14 | 768 | ~30 GB |
-| OpenCLIP ViT-H/14 | 1024 | ~40 GB |
-| DINOv2 ViT-L/14 | 1024 | ~40 GB |
-| SigLIP | 1152 | ~46 GB |
-
-4–5 embedding columns on 10M frames adds roughly 150–180 GB of float data on top of ~1 TB of JPEG bytes. Neither Lance nor Delta has a hard table size limit you'd hit, but encoding efficiency matters at this scale.
-
-**Why Lance handles this better than Delta:**
-
-Lance stores `fixed_size_list<float32>[N]` as contiguous raw float blocks with no per-element overhead. Parquet (Delta's backing format) uses repeated field encoding for arrays — designed for variable-length data — so fixed-size embeddings carry unnecessary overhead. In practice, Lance is ~10–30% more compact for high-dimensional float columns.
-
-More importantly, Lance's column projection means reading one embedding column during training has zero I/O cost from the others:
-
-```python
-# Only loads image + embedding_clip — other embedding columns are not read
-ds = lance.dataset(path, version=3)
-loader = lance.torch.data.LanceDataset(
-    ds,
-    columns=["image", "embedding_clip_vitl14"],
-    batch_size=64,
-)
-```
-
-In Parquet, each row group contains all columns. As you add more embedding columns, each row group grows larger — making random-access fetches more expensive even with column pruning, because more bytes must be skipped per row group seek.
-
-**Recommended workflow for embedding selection:**
-
-1. Run FE on a representative sample (~1–5M frames) rather than the full dataset to select the best embedding model.
-2. Add each candidate as a separate named column (`embedding_clip`, `embedding_dinov2`, etc.) via `mode='merge'` — each merge creates a new Lance version.
-3. Train lightweight probes or run zero-shot evals on each column independently.
-4. Once the winner is selected, run that model's FE pass on the full dataset.
-
-This avoids paying the GPU compute cost of generating all embeddings at full scale before knowing which one works.
 
 ---
 
@@ -182,15 +174,14 @@ This avoids paying the GPU compute cost of generating all embeddings at full sca
 
 | Library | Purpose |
 |---------|---------|
-| `lance` | Core read/write |
-| `ray[data]` | Distributed GPU processing |
-| `decord` | Video frame decoding |
-| `ffmpeg-python` | Audio extraction |
-| `transformers` | CLIP (embeddings) + Whisper (transcription) |
-| `torch` | Model training |
+| `lance` | Core read/write, blob layout |
+| `ray[data]` | Distributed data loading |
+| `ray[train]` | Distributed DDP training |
+| `decord` | GPU-accelerated video frame decoding |
+| `torch` + `torchvision` | Model definition and training loop |
 | `pyarrow` | Schema definition and batch construction |
 
-> **Note:** `lance-spark` (Maven JAR) is available for reading Lance datasets via Spark for cross-table joins or aggregations, but is not required for the main training pipeline.
+> **Note:** `lance-spark` (Maven JAR) is available for reading Lance datasets via Spark for cross-table analytics, but is not required for the training pipeline.
 
 ---
 
