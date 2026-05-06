@@ -200,6 +200,16 @@ Each write to the Lance dataset appends one row. The manifest is a registered De
 
 ## Parking Lot
 
+- **Format benchmark** — run end-to-end training throughput (samples/sec, GPU utilization, data loading wall time) on BDD100K across Lance, Mosaic Streaming MDS, and Delta/Parquet using the same ResNet-50 + Ray Train setup. MDS is the Databricks-native alternative for distributed training and is meaningfully better than Parquet for binary workloads, but lacks Lance's blob isolation — the benchmark would quantify that gap concretely.
+
+  | | Lance | Mosaic MDS | Delta/Parquet |
+  |---|---|---|---|
+  | Blob isolation | Yes — dedicated blob file | No — co-located per record | No — co-located per row group |
+  | Random access unit | Single row, O(1) | Within-shard index | Full row group (~128MB for images) |
+  | Wasted I/O per random fetch | ~0 (byte-offset seek) | Up to shard size (~67MB) | Up to row group (~128MB) |
+  | Cloud-native | Yes | Yes | Yes |
+  | Databricks integration | Volumes path | Volumes path | Native UC table |
+
 - Standardize `lance` library version across all notebooks via a shared `requirements.txt` or cluster init script.
 - **Audio-visual classification** — store video frames (image binary) and audio spectrograms (binary) as two heterogeneous blob columns in a single Lance table. This is the strongest demonstration of Lance's mixed-blob layout advantage over Parquet, which has no equivalent for co-locating heterogeneous binary payloads. Model: audio-visual classifier (e.g., AVSlowFast) trained on VGGSound or AudioSet.
 - **Semantic segmentation** — store image binary and pixel-level mask binary as two blob columns per row. Row-group collapse in Parquet is doubly pronounced (both blobs contribute to row group size shrinkage). Model: U-Net or SegFormer on BDD100K drivable area labels, which are already available in the dataset.
