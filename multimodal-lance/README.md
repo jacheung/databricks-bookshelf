@@ -84,21 +84,6 @@ This blueprint uses `ray.data.read_lance` rather than `ray.data.read_databricks_
 
 **3. Fragment-parallel reads map to Ray's actor model.** Each Ray worker reads its assigned Lance fragments independently with no cross-worker coordination. Binary payloads (image bytes) are stored in a separate blob layout — a worker loading a batch of embeddings or metadata never touches the image bytes.
 
-### Unity Catalog and Lance
-
-Lance datasets cannot use `catalog.schema.table` SQL syntax — Unity Catalog natively manages only Delta tables. Lance datasets are accessed by path:
-
-```python
-# ✅ Path-based access
-import lance
-ds = lance.dataset("/Volumes/main/ml/media/frames/")
-
-# ❌ Not supported
-spark.read.table("main.ml.frames")
-```
-
-Organize Lance datasets inside UC Volumes to retain storage governance and access control. Optionally maintain a thin Delta manifest table in UC recording each Lance dataset's path, row count, and version.
-
 ---
 
 ## Dataset: BDD100K
@@ -182,6 +167,34 @@ Located in `optional/`. Use when you need queryable metadata tables in Unity Cat
 | `pyarrow` | Schema definition and batch construction |
 
 > **Note:** `lance-spark` (Maven JAR) is available for reading Lance datasets via Spark for cross-table analytics, but is not required for the training pipeline.
+
+---
+
+## Caveat: Unity Catalog governance tradeoffs
+
+Lance datasets live in UC Volumes, not UC-registered tables. For most ML practitioners this is a non-issue — training pipelines are Python, not SQL, and the DataLoader doesn't care about catalog registration. Storage governance (file-level `READ FILES` / `WRITE FILES` grants, audit logging, Catalog Explorer visibility) is fully retained at the Volume level.
+
+Two UC features that Delta provides natively are unavailable for Lance:
+
+- **Data lineage.** UC captures column-level lineage for registered Delta tables. Path-based reads of Lance files produce no lineage entries — reads and writes are invisible to the UC lineage graph.
+- **Time travel.** Delta's `VERSION AS OF` / `TIMESTAMP AS OF` SQL syntax does not apply to Lance. Lance has its own immutable fragment versioning, but it is not SQL-queryable and carries no UC-managed retention policy.
+
+Both can be recovered with a thin Delta manifest table:
+
+```sql
+CREATE TABLE main.ml.lance_manifest (
+  dataset_name  STRING,
+  volume_path   STRING,
+  lance_version BIGINT,
+  row_count     BIGINT,
+  schema_json   STRING,
+  written_at    TIMESTAMP,
+  written_by    STRING,
+  run_id        STRING
+);
+```
+
+Each write to the Lance dataset appends one row. The manifest is a registered Delta table in UC — it appears in Catalog Explorer, participates in lineage, and is queryable via SQL. To reproduce a training run or roll back to a prior dataset state, look up the `lance_version` in the manifest and call `lance.dataset(path).checkout_version(n)`.
 
 ---
 
