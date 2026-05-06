@@ -7,7 +7,9 @@
   <img src="https://img.shields.io/badge/Lance-6B4FBB?style=flat-square&logoColor=white" alt="Lance"/>
 </p>
 
-A blueprint for building scalable multimodal ML training pipelines on Databricks using the [Lance](https://lancedb.github.io/lance/) columnar format. Covers GPU-accelerated frame extraction via Ray, incremental feature engineering, and optimized DataLoader-ready dataset construction.
+A blueprint demonstrating how the [Lance](https://lancedb.github.io/lance/) columnar format optimizes image-based ML training on Databricks — specifically addressing where Delta/Parquet breaks down for multimodal workloads.
+
+The three foundational image ML problem types — **classification**, **object detection**, and **segmentation** — all share the same core training bottleneck on Databricks: random-access reads of large binary payloads (raw image bytes) from a Parquet-backed store are fundamentally mismatched with how ML training DataLoaders work. This blueprint uses BDD100K dashcam footage and a CNN object detection task to demonstrate the Lance format as the solution, with Ray Data and Ray Train handling distributed training across GPUs.
 
 ---
 
@@ -195,3 +197,5 @@ This avoids paying the GPU compute cost of generating all embeddings at full sca
 ## Parking Lot
 
 - Standardize `lance` library version across all notebooks via a shared `requirements.txt` or cluster init script.
+- **Audio-visual classification** — store video frames (image binary) and audio spectrograms (binary) as two heterogeneous blob columns in a single Lance table. This is the strongest demonstration of Lance's mixed-blob layout advantage over Parquet, which has no equivalent for co-locating heterogeneous binary payloads. Model: audio-visual classifier (e.g., AVSlowFast) trained on VGGSound or AudioSet.
+- **Semantic segmentation** — store image binary and pixel-level mask binary as two blob columns per row. Row-group collapse in Parquet is doubly pronounced (both blobs contribute to row group size shrinkage). Model: U-Net or SegFormer on BDD100K drivable area labels, which are already available in the dataset.
