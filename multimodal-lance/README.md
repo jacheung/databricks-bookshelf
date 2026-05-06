@@ -26,9 +26,20 @@ Lance solves this with O(1) random access to any row. A batch of 64 frames from 
 | Random-access batch sampling | Native, O(1) per row | Row-group scan — expensive at scale |
 | Binary/image storage | Efficient, designed for it | Works, Parquet encoding is wasteful |
 | ML DataLoader integration | Native (`lance.torch.data`) | Requires Petastorm or custom bridge |
+| Ray Data integration | `ray.data.read_lance` — Arrow-native, fragment-parallel | `ray.data.read_parquet` — Parquet deserialization overhead |
 | Dataset versioning for ML iteration | First-class (append, delete, evolve schema) | Time-travel is SQL-oriented, not ML-oriented |
 | UC 3-level namespace | Path-based only | Full UC integration |
 | Cluster setup complexity | Needs extra JARs/libs | Zero extra setup |
+
+### Ray Data + Lance
+
+This blueprint uses `ray.data.read_lance` rather than `ray.data.read_databricks_tables` or `ray.data.read_parquet` for three reasons:
+
+**1. Random access without shuffle overhead.** ML training requires continuous data shuffling to prevent overfitting. Parquet forces Ray Data to read entire row groups (~128MB) to retrieve a handful of samples. Lance uses fragment-level addressing that enables O(1) point lookups — [benchmarked by LanceDB](https://lancedb.github.io/lance/) at 100–1000x faster random access than Parquet depending on access pattern. This means Ray Data can shuffle and stream granularly without saturating the network.
+
+**2. Near-zero deserialization overhead.** Ray Data's in-memory engine represents data as Apache Arrow blocks. Parquet requires a read → deserialize → convert-to-Arrow pipeline that burns CPU cycles on every batch. Lance is Arrow-native: it stores data in Arrow IPC format internally, so Ray Data reads directly into Arrow blocks with no deserialization step. That CPU budget goes to preprocessing and augmentation instead.
+
+**3. Fragment-parallel reads map to Ray's actor model.** A Lance dataset is composed of independent fragments. Each Ray worker actor reads its assigned fragment(s) with no cross-worker coordination, making data loading embarrassingly parallel. Large binary payloads (image bytes) are stored in a separate blob layout and don't slow down metadata scans — Ray can filter on `video_id` or `timestamp_ms` without touching the image column at all.
 
 ### Unity Catalog and Lance
 
